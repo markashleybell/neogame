@@ -37,10 +37,10 @@ const GUN_TABLE = [
   ['PEA SHOOTER',        24,    8,  16,  1,     0,     0,   4,    1,    9,  false, 0, 0, '#7ff', 'pellet'],
   ['LASER PISTOL',       28,    9,  12,  1,     0,  0.02,   4,  1.5,   12,  false, 0.2, 0, '#0ff', 'laser'],
   ['NEON SMG',           32,   11,   6,  1,     0,  0.07,   4,    1,   13,  false, 0.3, 1, '#0fc', 'tracer'],
-  ['SCATTERBLASTER',     37,   12,  15,  5,  0.22,  0.03,   5,  1.5,   11,  false, 1.5, 3, '#ff0', 'buckshot'],
+  ['FACE MCSHOOTY',      37,   12,  15,  5,  0.22,  0.03,   5,  1.5,   11,  false, 1.5, 3, '#ff0', 'buckshot'],
   ['TURBO RIFLE',        42,   14,   4,  2,  0.05,  0.03,   5,    2,   15,  false, 0.5, 2, '#f0f', 'tracer'],
-  ['MINIGUN',            48,   16,   2,  1,     0,   0.1,   5,    2,   15,  false, 0.6, 3, '#f6f', 'tracer'],
-  ['HAND CANNON',        56,   19,  16,  1,     0,     0,  12,   12,   11,   true, 4, 8, '#f80', 'shell'],
+  ['LEAD FOUNTAIN',      48,   16,   2,  1,     0,   0.1,   5,    2,   15,  false, 0.6, 3, '#f6f', 'tracer'],
+  ['MR BANG BANG',       56,   19,  16,  1,     0,     0,  12,   12,   11,   true, 4, 8, '#f80', 'shell'],
   ['PLASMA HOSE',        64,   21,   3,  2,   0.1,  0.12,   9,    3,   13,   true, 1, 4, '#8f0', 'plasma'],
   ['RAILGUN',            73,   24,  18,  1,     0,     0,  10,   30,   30,   true, 5, 10, '#0ff', 'beam'],
   ['TANK BARREL',        84,   28,  14,  5,  0.25,  0.03,  13,   12,   13,   true, 5, 12, '#fd0', 'shell'],
@@ -66,7 +66,7 @@ function gunStats(level) {
   const f = Math.pow(1.15, k);
   return {
     ...base,
-    name: 'GUN OF GOD MK.' + k,
+    name: 'GOD OF GUNS MK.' + k,
     len: base.len * f, thick: base.thick * f, r: base.r * f,
     dmg: base.dmg * f, count: Math.min(15, base.count + k),
     color: ['#ffd700', '#7ff', '#fff', '#f6f', '#ff4'][k - 1],
@@ -1732,13 +1732,13 @@ function drawLogo(y, t) {
 
 function drawTitle() {
   drawLogo(130, titleT);
-  neonText('THE GUN ONLY GETS BIGGER', W / 2, 210, 14, '#ffe66d');
+  neonText('THE GUN ONLY GETS BIGGER', W / 2, 280, 14, '#ffe66d');
 
   if ((titleT >> 5) % 2 === 0) neonText('PRESS START / ENTER', W / 2, 360, 16, '#fff');
   neonText('MOVE ARROWS/WASD  JUMP Z/SPACE  SHOOT X  AIM UP/DOWN  M MUTE', W / 2, 460, 8, '#7ff');
   neonText('PAD: STICK/DPAD MOVE  A JUMP  X/B/RT SHOOT  START PAUSE', W / 2, 480, 8, '#7ff');
   neonText('DOWN+JUMP TO DROP THROUGH PLATFORMS', W / 2, 500, 8, '#7ff');
-  if (best) neonText('BEST ' + best, W / 2, 255, 10, '#ff7bd0');
+  if (best) neonText('BEST ' + best, W / 2, 305, 10, '#ff7bd0');
 }
 
 function render() {
@@ -1803,7 +1803,7 @@ function drawNukeSequence(g) {
   }
   if (t > 200) {
     ctx.globalAlpha = clamp((t - 200) / 40, 0, 1);
-    neonText('THE END', W / 2, 90, 40, '#ffe66d');
+    neonText('FUCK YEAH', W / 2, 90, 40, '#ffe66d');
     neonText('YOU NUKED EVERYTHING', W / 2, 140, 14, '#fff');
     ctx.globalAlpha = 1;
   }
