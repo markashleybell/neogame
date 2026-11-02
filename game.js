@@ -137,6 +137,7 @@ function rumble(strong, weak, ms) {
 // Sound: tiny WebAudio synth for SFX + a synthwave loop
 // ---------------------------------------------------------------------------
 const midi = m => 440 * Math.pow(2, (m - 69) / 12);
+const MUSIC_BPM = 124;
 
 let savedMute = false;
 try { savedMute = localStorage.getItem('neogun-muted') === '1'; } catch (e) {}
@@ -151,19 +152,31 @@ const Sound = {
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : 0.45;
     this.master.connect(this.ctx.destination);
-    // Music runs through a lowpass to keep it murky.
+    // Music bus: a gentle lowpass to take the edge off the saws.
     this.music = this.ctx.createGain();
-    this.music.gain.value = 0.26;
-    const murk = this.ctx.createBiquadFilter();
-    murk.type = 'lowpass';
-    murk.frequency.value = 1400;
-    murk.Q.value = 4;
-    this.music.connect(murk);
-    murk.connect(this.master);
+    this.music.gain.value = 0.22;
+    const tone = this.ctx.createBiquadFilter();
+    tone.type = 'lowpass';
+    tone.frequency.value = 3800;
+    this.music.connect(tone);
+    tone.connect(this.master);
     const len = this.ctx.sampleRate;
     this.noiseBuf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
     const d = this.noiseBuf.getChannelData(0);
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    // Gated reverb for that 80s snare: a dense burst that stops dead after 0.3s.
+    this.verb = this.ctx.createConvolver();
+    const irLen = Math.floor(this.ctx.sampleRate * 0.3);
+    const ir = this.ctx.createBuffer(2, irLen, this.ctx.sampleRate);
+    for (let c = 0; c < 2; c++) {
+      const ch = ir.getChannelData(c);
+      for (let i = 0; i < irLen; i++) ch[i] = (Math.random() * 2 - 1) * (1 - 0.3 * i / irLen);
+    }
+    this.verb.buffer = ir;
+    const verbGain = this.ctx.createGain();
+    verbGain.gain.value = 0.18;
+    this.verb.connect(verbGain);
+    verbGain.connect(this.music);
     this.nextTime = this.ctx.currentTime + 0.1;
     setInterval(() => this.schedule(), 25);
   },
@@ -200,9 +213,24 @@ const Sound = {
     src.connect(f); f.connect(g); g.connect(dest || this.master);
     src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
   },
+  // Two detuned saws with a soft attack: the classic 80s polysynth pad / lead.
+  synth(freq, dur, vol, t, dest, attack = 0.01, type = 'sawtooth') {
+    for (const det of [-9, 9]) {
+      const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+      o.type = type;
+      o.frequency.value = freq;
+      o.detune.value = det;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.linearRampToValueAtTime(vol, t + attack);
+      g.gain.setValueAtTime(vol, t + Math.max(attack, dur - 0.08));
+      g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+      o.connect(g); g.connect(dest);
+      o.start(t); o.stop(t + dur + 0.02);
+    }
+  },
   schedule() {
     if (!this.musicOn) { this.nextTime = this.ctx.currentTime + 0.05; return; }
-    const stepDur = 60 / 96 / 4;
+    const stepDur = 60 / MUSIC_BPM / 4;
     while (this.nextTime < this.ctx.currentTime + 0.12) {
       this.playStep(this.step, this.nextTime);
       this.nextTime += stepDur;
@@ -210,25 +238,44 @@ const Sound = {
     }
   },
   playStep(step, t) {
-    // Dm  Bb  Gm  A — all minor apart from the tense A major turnaround.
+    // Dm  Bb  Gm  A, in four-bar phrases. Sections build up over 16 bars:
+    // drums + bass + pads, then + arpeggio, then + lead, then everything.
     const roots = [38, 34, 43, 33];
-    const chords = [[0, 3, 7], [0, 4, 7], [0, 3, 7], [0, 4, 7]];
+    const chords = [[0, 3, 7, 12], [0, 4, 7, 12], [0, 3, 7, 12], [0, 4, 7, 12]];
     const bar = Math.floor(step / 16) % 4, s = step % 16, m = this.music;
-    const root = roots[bar];
-    const dur = 60 / 96 / 4;
-    // Driving, unchanging bass pulse on the root
-    if (s % 2 === 0) this.tone(midi(root), dur * 1.8, 'sawtooth', 0.32, 0, t, m);
-    // Low drone pad at the top of each bar
-    if (s === 0) {
-      for (const n of chords[bar]) this.tone(midi(root + 12 + n), dur * 16, 'sawtooth', 0.06, 0, t, m);
+    const section = Math.floor(step / 64) % 4;
+    const root = roots[bar], chord = chords[bar];
+    const dur = 60 / MUSIC_BPM / 4;
+    // Pulsing 16th-note octave bass
+    this.tone(midi(root + (s % 2 ? 12 : 0)), dur * 0.9, 'sawtooth', 0.2, 0, t, m);
+    // Detuned pad chord held for the bar
+    if (s === 0) for (const n of chord.slice(0, 3)) this.synth(midi(root + 24 + n), dur * 16, 0.035, t, m, 0.25);
+    // Drums: four-on-the-floor kick, gated snare on 2 and 4, 16th hats
+    if (s % 4 === 0) this.tone(130, 0.25, 'sine', 1, 35, t, m);
+    if (s === 4 || s === 12) {
+      this.noise(0.2, 0.5, 6000, t, m);
+      this.noise(0.2, 0.6, 6000, t, this.verb);
+      this.tone(190, 0.1, 'triangle', 0.3, 120, t, m);
     }
-    if (s % 4 === 0) this.tone(110, 0.3, 'sine', 1, 30, t, m);
-    if (s === 4 || s === 12) this.noise(0.25, 0.35, 1800, t, m);
-    if (s % 4 === 2) this.noise(0.04, 0.06, 6000, t, m);
-    // Slow, sparse minor arpeggio on the second pass
-    if (Math.floor(step / 64) % 2 === 1 && s % 4 === 0) {
-      const c = chords[bar];
-      this.tone(midi(root + 24 + c[(s / 4) % c.length]), dur * 3.5, 'triangle', 0.18, 0, t, m);
+    this.noise(0.03, s % 4 === 2 ? 0.12 : 0.05, 10000, t, m);
+    // Falling tom fill at the end of every eighth bar
+    if (step % 128 >= 124) this.tone([260, 210, 165, 125][s - 12], 0.25, 'sine', 0.7, 60, t, m);
+    // Arpeggio: chord tones up and down over two octaves
+    if (section === 1 || section === 3) {
+      const pat = [0, 1, 2, 3, 2, 1, 2, 3];
+      const n = chord[pat[s % 8] % 4] + (s >= 8 ? 12 : 0);
+      this.tone(midi(root + 36 + n), dur * 0.8, 'square', 0.05, 0, t, m);
+    }
+    // Lead melody
+    if (section >= 2) {
+      const LEAD = [
+        { 0: [74, 6], 6: [77, 4], 10: [76, 6] },
+        { 0: [74, 8], 8: [72, 4], 12: [70, 4] },
+        { 0: [70, 6], 6: [74, 4], 10: [79, 6] },
+        { 0: [76, 8], 8: [73, 8] },
+      ];
+      const note = LEAD[bar][s];
+      if (note) this.synth(midi(note[0]), dur * note[1], 0.06, t, m, 0.02, 'square');
     }
   },
   shoot(level) {
