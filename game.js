@@ -10,7 +10,8 @@ const ENEMY_SCALE = 1.5;
 const GROW_FRAMES = 45;
 
 const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
+// `let` so gun sprites can temporarily redirect drawing to their low-res buffer.
+let ctx = canvas.getContext('2d');
 const wrap = document.getElementById('wrap');
 
 function fit() {
@@ -68,7 +69,7 @@ function gunStats(level) {
     name: 'GUN OF GOD MK.' + k,
     len: base.len * f, thick: base.thick * f, r: base.r * f,
     dmg: base.dmg * f, count: Math.min(15, base.count + k),
-    color: ['#f0f', '#0ff', '#ff0', '#fff'][k % 4],
+    color: ['#ffd700', '#7ff', '#fff', '#f6f', '#ff4'][k - 1],
   };
 }
 
@@ -391,7 +392,9 @@ function handPos(g) {
   const p = g.player, sh = shoulderPos(p);
   // Aiming upwards needs extra reach to clear the head.
   const a = armLength(g) + Math.max(0, -Math.sin(p.ang)) * p.h * 0.5;
-  return { x: sh.x + Math.cos(p.ang) * a, y: sh.y + Math.sin(p.ang) * a };
+  // Lift thicker guns when held level, so the big ones don't hide the floor and holes.
+  const lift = gunStats(g.gunLevel).thick * 0.5 * Math.abs(Math.cos(p.ang));
+  return { x: sh.x + Math.cos(p.ang) * a, y: sh.y + Math.sin(p.ang) * a - lift };
 }
 
 function banner(g, text, sub, color) {
@@ -909,6 +912,9 @@ function drawArm(g) {
 
 // Gun palette
 const G_DARK = '#1a0d33', G_MID = '#2a1650', G_LIGHT = '#3a2270', G_WOOD = '#6b3416', G_STEEL = '#55557a';
+// Body and trim colours for the Planet Splitter (0) and Gun of God Mk.1-5.
+const GOD_BODY = [G_MID, G_MID, '#1d2a50', '#3a3a5a', '#4a1a4a', '#8a6a10'];
+const GOD_TRIM = [G_LIGHT, '#b08a20', G_LIGHT, '#b08a20', G_LIGHT, '#ffd700'];
 
 function gunBox(x, y, w, h, fill) {
   ctx.fillStyle = fill;
@@ -1008,8 +1014,8 @@ const GUN_DRAW = [
     gunCircle(-T * 0.2, T * 0.9, T * 0.6, G_DARK);
     gunBox(-T * 0.6, -T / 2, L * 0.3, T, G_MID);
     for (let i = 0; i < 3; i++) {
-      const y = Math.sin(t * 0.6 + i * 2.09) * T * 0.3;
-      gunBox(L * 0.25, y - T * 0.09, L * 0.75, T * 0.18, i === 0 ? G_STEEL : G_LIGHT);
+      const y = Math.sin(t * 0.6 + i * 2.09) * T * 0.34;
+      gunBox(L * 0.25, y - T * 0.13, L * 0.75, T * 0.26, i === 0 ? G_STEEL : G_LIGHT);
     }
     gunBox(L * 0.45, -T * 0.45, L * 0.05, T * 0.9, s.color);
     gunBox(L * 0.92, -T * 0.45, L * 0.05, T * 0.9, s.color);
@@ -1102,36 +1108,93 @@ const GUN_DRAW = [
     }
     glow(L, 0, T * (0.35 + 0.1 * Math.sin(t * 0.25)), '#fff', 0.8);
   },
-  // Planet splitter: everything at once
-  (L, T, s, t) => {
-    grip(T * 0.3);
-    for (const y of [-0.75, 0.75]) gunBox(T * 0.5, T * y - T * 0.12, L * 0.7, T * 0.24, G_STEEL);
-    ctx.fillStyle = G_MID;
-    ctx.beginPath();
-    for (let x = -T; x < L * 0.6; x += T * 0.6) {
-      ctx.moveTo(x, -T * 0.5); ctx.lineTo(x + T * 0.3, -T * 1.1); ctx.lineTo(x + T * 0.6, -T * 0.5);
-    }
-    ctx.fill(); ctx.stroke();
-    gunBox(-T * 1.2, -T * 0.5, L * 0.65 + T * 1.2, T, G_MID);
-    hazard(L * 0.05, -T * 0.5, L * 0.12, T);
-    gunBox(L * 0.6, -T * 0.35, L * 0.4, T * 0.7, G_LIGHT);
-    for (let i = 0; i < 4; i++) gunBox(L * 0.65 + i * L * 0.085, -T * 0.5, T * 0.15, T, s.color);
-    for (let i = 0; i < 8; i++) {
-      ctx.fillStyle = (Math.floor(t / 5) + i) % 3 === 0 ? '#fff' : (i % 2 ? '#f0f' : '#0ff');
-      ctx.fillRect(L * 0.2 + i * L * 0.05, -T * 0.06, T * 0.12, T * 0.12);
-    }
-    gunCircle(-T * 0.6, 0, T * 0.3, G_DARK);
-    glow(-T * 0.6, 0, T * 0.25, s.color, 0.7 + 0.3 * Math.sin(t * 0.2));
-  },
+  // Planet splitter: the base the Gun of God tiers build on
+  (L, T, s, t) => drawGodGun(L, T, s, t, 0),
 ];
 
-function drawGunShape(s, level, muzzle, t) {
+// Guns are drawn as vector shapes into a low-res buffer, then snapped to a palette,
+// given a 1px outline and top/bottom shading, and scaled back up without smoothing.
+const GUN_PX = 2; // world units per art pixel, matching the hero sprite
+const gunCanvas = document.createElement('canvas');
+const gunCtx = gunCanvas.getContext('2d', { willReadFrequently: true });
+const OUTLINE = [7, 2, 15];
+
+function hexToRgb(hex) {
+  let h = hex.replace('#', '');
+  if (h.length === 3) h = h.split('').map(c => c + c).join('');
+  const n = parseInt(h, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+const GUN_PALETTE = [...new Set([
+  G_DARK, G_MID, G_LIGHT, G_WOOD, G_STEEL, '#e6c200', '#ffe600', '#111111', '#ffffff', '#c33', '#f00', '#400',
+  '#555', '#3a4a1a', '#9ff', '#ff0', '#f44', '#f0f', '#0ff', '#d9a441',
+  ...GOD_BODY, ...GOD_TRIM, '#ffd700', '#7ff', '#f6f', '#ff4',
+  ...GUN_TABLE.map(s => s.color),
+])].map(hexToRgb);
+const paletteCache = new Map();
+function nearestColour(r, g, b) {
+  const key = ((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3);
+  let c = paletteCache.get(key);
+  if (c) return c;
+  let best = Infinity;
+  for (const p of GUN_PALETTE) {
+    const d = (p[0] - r) ** 2 + (p[1] - g) ** 2 + (p[2] - b) ** 2;
+    if (d < best) { best = d; c = p; }
+  }
+  paletteCache.set(key, c);
+  return c;
+}
+
+function pixelateGun(w, h) {
+  const img = gunCtx.getImageData(0, 0, w, h), d = img.data;
+  const solid = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) solid[i] = d[i * 4 + 3] > 110 ? 1 : 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x, o = i * 4;
+      if (solid[i]) {
+        const c = nearestColour(d[o], d[o + 1], d[o + 2]);
+        const f = y > 0 && !solid[i - w] ? 1.35 : y < h - 1 && !solid[i + w] ? 0.6 : 1;
+        d[o] = Math.min(255, c[0] * f); d[o + 1] = Math.min(255, c[1] * f); d[o + 2] = Math.min(255, c[2] * f);
+        d[o + 3] = 255;
+      } else if ((x > 0 && solid[i - 1]) || (x < w - 1 && solid[i + 1]) || (y > 0 && solid[i - w]) || (y < h - 1 && solid[i + w])) {
+        d[o] = OUTLINE[0]; d[o + 1] = OUTLINE[1]; d[o + 2] = OUTLINE[2]; d[o + 3] = 255;
+      } else {
+        d[o + 3] = 0;
+      }
+    }
+  }
+  gunCtx.putImageData(img, 0, 0);
+}
+
+// Draws the gun pointing along +x with its grip at the origin. `flip` mirrors it vertically
+// before pixelation so the shading still lights it from above.
+function drawGunShape(s, level, muzzle, t, flip = false) {
   const L = s.len, T = s.thick;
-  ctx.lineWidth = Math.max(1, T * 0.06);
+  const x0 = -2.5 * T - 4, x1 = L + 0.3 * T + 4, yTop = -1.4 * T - 4, yBot = 2.1 * T + 4;
+  const w = Math.ceil((x1 - x0) / GUN_PX) + 2, h = Math.ceil((yBot - yTop) / GUN_PX) + 2;
+  if (gunCanvas.width < w || gunCanvas.height < h) {
+    gunCanvas.width = Math.max(gunCanvas.width, w);
+    gunCanvas.height = Math.max(gunCanvas.height, h);
+  }
+  gunCtx.setTransform(1, 0, 0, 1, 0, 0);
+  gunCtx.clearRect(0, 0, w, h);
+  gunCtx.setTransform(1 / GUN_PX, 0, 0, (flip ? -1 : 1) / GUN_PX, -x0 / GUN_PX + 1, (flip ? yBot : -yTop) / GUN_PX + 1);
+  const main = ctx;
+  ctx = gunCtx;
+  ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.lineWidth = Math.max(GUN_PX, T * 0.06);
   ctx.strokeStyle = s.color;
-  ctx.lineJoin = 'round';
+  ctx.lineJoin = 'miter';
   if (level >= NUKE_LEVEL) drawNukeGun(L, T, s, t);
-  else GUN_DRAW[Math.min(level, GUN_DRAW.length - 1)](L, T, s, t);
+  else if (level >= GUN_TABLE.length) drawGodGun(L, T, s, t, level - (GUN_TABLE.length - 1));
+  else GUN_DRAW[level](L, T, s, t);
+  ctx = main;
+  pixelateGun(w, h);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(gunCanvas, 0, 0, w, h, x0 - GUN_PX, (flip ? -yBot : yTop) - GUN_PX, w * GUN_PX, h * GUN_PX);
+  ctx.imageSmoothingEnabled = true;
   // muzzle glow / flash
   glow(L, 0, T * 0.25, s.color, 0.35 + 0.15 * Math.sin(t * 0.2));
   if (muzzle > 0) {
@@ -1152,6 +1215,70 @@ function trefoil(cx, cy, r) {
   ctx.beginPath(); ctx.arc(cx, cy, r * 0.25, 0, Math.PI * 2); ctx.fill();
   ctx.fillStyle = '#111';
   ctx.beginPath(); ctx.arc(cx, cy, r * 0.15, 0, Math.PI * 2); ctx.fill();
+}
+
+// Planet Splitter (mk 0) and the Gun of God tiers (mk 1-5). Each tier keeps the
+// previous tier's parts and adds one more.
+
+function drawGodGun(L, T, s, t, mk) {
+  const body = GOD_BODY[mk], trim = GOD_TRIM[mk];
+  grip(T * 0.3);
+  // Mk.3: swept wings at the back
+  if (mk >= 3) {
+    ctx.fillStyle = G_LIGHT;
+    for (const dir of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(-T * 1.1, dir * T * 0.5); ctx.lineTo(-T * 1.9, dir * T * 1.3);
+      ctx.lineTo(-T * 0.9, dir * T * 1.3); ctx.lineTo(L * 0.15, dir * T * 0.5);
+      ctx.closePath(); ctx.fill(); ctx.stroke();
+    }
+  }
+  // side barrels; Mk.4 makes them longer with capped muzzles
+  const sideLen = mk >= 4 ? L * 0.88 : L * 0.7;
+  for (const y of [-0.75, 0.75]) {
+    gunBox(T * 0.5, T * y - T * 0.12, sideLen, T * 0.24, G_STEEL);
+    if (mk >= 4) gunBox(T * 0.5 + sideLen - T * 0.2, T * y - T * 0.18, T * 0.2, T * 0.36, s.color);
+  }
+  // flat trapezoid housing on top
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.moveTo(-T * 1.0, -T * 0.5); ctx.lineTo(-T * 0.6, -T * 0.95);
+  ctx.lineTo(L * 0.48, -T * 0.95); ctx.lineTo(L * 0.6, -T * 0.5);
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  gunBox(-T * 0.3, -T * 0.82, L * 0.6, T * 0.12, trim);
+  // Mk.5: battlements along the top, like a crown
+  if (mk >= 5) for (let i = 0; i < 4; i++) gunBox(-T * 0.4 + i * L * 0.16, -T * 1.2, T * 0.3, T * 0.27, '#ffd700');
+  // main body
+  gunBox(-T * 1.2, -T * 0.5, L * 0.65 + T * 1.2, T, body);
+  if (mk < 3) hazard(L * 0.05, -T * 0.5, L * 0.12, T);
+  else gunBox(L * 0.05, -T * 0.5, L * 0.12, T, trim);
+  // front barrel and cooling fins
+  gunBox(L * 0.6, -T * 0.35, L * 0.4, T * 0.7, G_LIGHT);
+  for (let i = 0; i < 4; i++) gunBox(L * 0.65 + i * L * 0.085, -T * 0.5, T * 0.15, T, s.color);
+  // Mk.2: pulsing halo rings round the barrel
+  if (mk >= 2) {
+    ctx.save();
+    ctx.lineWidth = Math.max(GUN_PX, T * 0.08);
+    ctx.strokeStyle = '#ffd700';
+    for (let i = 0; i < 2; i++) {
+      const ry = T * (0.75 + 0.08 * Math.sin(t * 0.15 + i * 2));
+      ctx.beginPath(); ctx.ellipse(L * (0.74 + i * 0.16), 0, T * 0.14, ry, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  for (let i = 0; i < 8; i++) {
+    ctx.fillStyle = (Math.floor(t / 5) + i) % 3 === 0 ? '#fff' : (i % 2 ? '#f0f' : '#0ff');
+    ctx.fillRect(L * 0.2 + i * L * 0.05, -T * 0.06, T * 0.12, T * 0.12);
+  }
+  // power core; Mk.1 and up it's an all-seeing eye
+  gunCircle(-T * 0.6, 0, T * 0.3, G_DARK);
+  if (mk >= 1) {
+    gunCircle(-T * 0.6, 0, T * 0.22, '#fff');
+    ctx.fillStyle = s.color;
+    ctx.beginPath(); ctx.arc(-T * 0.6 + Math.sin(t * 0.05) * T * 0.08, 0, T * 0.1, 0, Math.PI * 2); ctx.fill();
+  } else {
+    glow(-T * 0.6, 0, T * 0.25, s.color, 0.7 + 0.3 * Math.sin(t * 0.2));
+  }
 }
 
 // Launcher tube with a warhead strapped to the front.
@@ -1191,13 +1318,13 @@ function drawGun(g) {
   ctx.translate(h.x, h.y);
   ctx.rotate(p.ang);
   const c = Math.cos(p.ang);
-  if (c < -0.01 || (Math.abs(c) <= 0.01 && p.face < 0)) ctx.scale(1, -1);
+  const flip = c < -0.01 || (Math.abs(c) <= 0.01 && p.face < 0);
   // Freshly upgraded guns spring out from their old size.
   if (g.gunGrow > 0) {
     const k = gunGrowScale(g);
     ctx.scale(k, k);
   }
-  drawGunShape(s, g.gunLevel, p.muzzle, g.frame);
+  drawGunShape(s, g.gunLevel, p.muzzle, g.frame, flip);
   ctx.restore();
   if (g.gunGrow > GROW_FRAMES - 8) {
     ctx.save();
@@ -1560,18 +1687,7 @@ function drawTitle() {
   drawLogo(130, titleT);
   neonText('THE GUN ONLY GETS BIGGER', W / 2, 210, 14, '#ffe66d');
 
-  // Cycle a preview of the gun progression, scaled down to fit.
-  const lvl = Math.floor(titleT / 70) % GUN_TABLE.length;
-  const s = GUN_TABLE[lvl];
-  const sc = Math.min(2.5, 420 / s.len);
-  ctx.save();
-  ctx.translate(W / 2 - (s.len * sc) / 2, 300);
-  ctx.scale(sc, sc);
-  drawGunShape(s, lvl, titleT % 20 < 4 ? 1 : 0, titleT);
-  ctx.restore();
-  neonText('LV.' + (lvl + 1) + ' ' + s.name, W / 2, 360, 10, s.color);
-
-  if ((titleT >> 5) % 2 === 0) neonText('PRESS START / ENTER', W / 2, 410, 16, '#fff');
+  if ((titleT >> 5) % 2 === 0) neonText('PRESS START / ENTER', W / 2, 360, 16, '#fff');
   neonText('MOVE ARROWS/WASD  JUMP Z/SPACE  SHOOT X  AIM UP/DOWN  M MUTE', W / 2, 460, 8, '#7ff');
   neonText('PAD: STICK/DPAD MOVE  A JUMP  X/B/RT SHOOT  START PAUSE', W / 2, 480, 8, '#7ff');
   neonText('DOWN+JUMP TO DROP THROUGH PLATFORMS', W / 2, 500, 8, '#7ff');
